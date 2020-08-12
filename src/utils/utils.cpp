@@ -88,3 +88,19 @@ void addDebugPrivilegesToCurrentProcess()
 {
 	addPrivilegeToCurrentProcess((char*)"SeDebugPrivilege");
 }
+
+std::string convertWstringToCstring(std::wstring wString)
+{
+	size_t numConverted = 0;
+	char* cString = (char*)calloc(wString.size() + 1, sizeof(char));
+	if (cString != NULL) {
+		wcstombs_s(&numConverted, cString, wString.size() + 1, wString.c_str(), (wString.size() + 1) * sizeof(char));
+
+		std::string retCstr(cString);
+		if (cString)
+			free(cString);
+		return retCstr;
+	}
+	else
+		return std::string();
+}

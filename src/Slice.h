@@ -42,9 +42,6 @@ BOOLEAN MsvpPasswordValidate(BOOLEAN UasCompatibilityRequired,
 	PVOID LmSessionKey
 );
 
-typedef void(_stdcall* FnTestF)(int n);
-
-
 // main Slice logic interface
 class Slice {
 public:
@@ -56,7 +53,6 @@ public:
 private:
 	void hookfunc();
 	void unhookfunc();
-	void testhook();
 
 	void* pMsvpPasswordValidate;
 	ClientPipes ioPipes;

